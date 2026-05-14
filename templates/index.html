@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aegis - Crisis Coordinator Dashboard</title>
+    <!-- External CSS -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+    <div class="header">
+        <h1>Aegis Command Center</h1>
+        <p>Gemma 4 Edge-Native Crisis Coordinator</p>
+    </div>
+
+    <!-- Architecture Explanation Section -->
+    <div class="architecture-wrapper">
+        <h2 class="panel-title" style="margin-bottom: 5px; text-align: center;">System Architecture & Data Flow</h2>
+        <p style="text-align: center; color: var(--text-muted); margin-bottom: 30px; font-size: 0.95rem;">
+            This visualizes exactly what happens in the code when a report is submitted.
+        </p>
+        <div class="architecture-diagram">
+            <div class="arch-node" id="node-a">
+                <h3>Node A: Field</h3>
+                <p>Gemma 4 E2B</p>
+                <div style="margin-top: 10px; font-size: 0.8rem; color: var(--accent);">[Audio/Image Ingestion]</div>
+            </div>
+            
+            <div class="arch-conn">
+                <div class="arch-conn-label">Mesh Network</div>
+                <div class="packet" id="packet-1"></div>
+            </div>
+
+            <div class="arch-node" id="node-b">
+                <h3>Node B: Command</h3>
+                <p>Gemma 4 31B</p>
+                <div style="margin-top: 10px; font-size: 0.8rem; color: var(--accent);">[Multi-turn Reasoning]</div>
+            </div>
+
+            <div class="arch-conn">
+                <div class="arch-conn-label">Tool Calls</div>
+                <div class="packet" id="packet-2" style="background-color: var(--warning); box-shadow: 0 0 10px var(--warning);"></div>
+            </div>
+
+            <div class="arch-node db" id="node-db">
+                <h3>Local GIS</h3>
+                <p>SQLite DB</p>
+                <div style="margin-top: 10px; font-size: 0.8rem; color: var(--warning);">[Routes, Hazards, Zones]</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Left Panel: Incoming Reports -->
+        <div class="panel reports-panel">
+            <h2 class="panel-title">📡 Incoming Field Reports</h2>
+            <div id="reports-list">
+                <div class="empty-state">Waiting for field reports...</div>
+            </div>
+        </div>
+
+        <!-- Center Panel: GIS Map -->
+        <div class="panel map-panel" style="padding: 0; display: flex; flex-direction: column;">
+            <h2 class="panel-title" style="margin: 20px 20px 10px 20px;">🗺️ Live Operations Map</h2>
+            <div id="map" style="flex-grow: 1; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; z-index: 1;"></div>
+        </div>
+
+        <!-- Right Panel: AI Reasoning & Dispatch -->
+        <div class="panel">
+            <h2 class="panel-title">🧠 Gemma 4 Reasoning & Dispatch</h2>
+            <div id="active-dispatch">
+                <div class="empty-state">Select a report to view the dispatch plan.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script Dependencies -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- Jinja injected initial data (valid JSON payload to prevent linter errors) -->
+    <script type="application/json" id="events-data">
+        {{ events | tojson | safe }}
+    </script>
+
+    <!-- External JS -->
+    <script src="/static/script.js"></script>
+</body>
+</html>

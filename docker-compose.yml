@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  command-center:
+    build: .
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # Optional: mount models if they exist locally
+      - ./models:/app/models
+    environment:
+      - PYTHONUNBUFFERED=1

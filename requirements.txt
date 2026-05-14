@@ -1,0 +1,49 @@
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  Aegis: Edge-Native Crisis Coordinator                          ║
+# ║  Dependencies for Gemma 4 Good Hackathon                        ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+
+# ── Node B: Command Center ────────────────────────────────────────
+# Gemma 4 31B Dense (GGUF) inference via llama.cpp Python bindings.
+# Install with GPU support if available:
+#   CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+llama-cpp-python>=0.3.8
+
+# ── Node A: Field Operator ────────────────────────────────────────
+# Cactus edge inference engine (Python FFI wrapper).
+# Install from: https://github.com/cactus-compute/cactus
+# Uncomment after installing cactus from source:
+# cactus
+
+# LiteRT LM (Google on-device inference).
+# Install from: https://github.com/nicfv/litert-lm
+# Uncomment after installing litert_lm:
+# litert-lm
+
+# ── API & Networking ──────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+httpx>=0.27.0
+
+# ── Data Models & Validation ─────────────────────────────────────
+pydantic>=2.9.0
+
+# ── Image Processing ─────────────────────────────────────────────
+Pillow>=10.0.0
+numpy>=1.26.0
+opencv-python>=4.8.0
+
+# ── Audio Processing ─────────────────────────────────────────────
+soundfile>=0.12.1
+sounddevice>=0.4.6
+
+# ── CLI & Logging ────────────────────────────────────────────────
+rich>=13.9.0
+
+# ── Bi-Directional TTS ───────────────────────────────────────────
+pyttsx3>=2.90
+
+# ── Testing & Evaluation ─────────────────────────────────────────
+pytest>=7.4.0
+pytest-asyncio>=0.21.1
+Faker>=20.0.0
