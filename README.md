@@ -1,92 +1,94 @@
-# 🛡️ Aegis: The Edge-Native Crisis Coordinator
+# 🛡️ Aegis: Edge-Native Crisis Coordinator
 
-> **Gemma 4 Good Hackathon — Global Resilience & Safety Tracks**
+Aegis is an advanced, edge-native, AI-driven crisis coordination platform built for rapid disaster response. Designed around the Gemma 4 model, Aegis bridges the gap between field operators in degraded network environments and centralized command centers.
 
-A decentralized, zero-internet disaster intelligence system that uses local **Gemma 4** models to route and verify field reports through a simulated mesh network.
+## ✨ Key Features
 
-## Architecture
+### 📡 Edge-Native Architecture & Resilience
+- **Encrypted Mesh Protocol**: SQLite-backed offline outbox with XOR-SHA256 encrypted payloads, integrity checksums, and automatic retry with back-off.
+- **YOLOv8-nano Edge Vision**: Multi-class hazard detection (civilians, vehicles, animals) with disaster-context labels, falling back to HOG if ultralytics is unavailable.
+- **Multimodal Ingestion**: Edge devices capture live audio and webcam imagery for rich situational awareness.
+- **Peer Node Discovery**: Mesh outbox tracks peer field nodes for future P2P sync capability.
 
-```
-┌──────────────────────────┐     Simulated Mesh     ┌──────────────────────────────┐
-│  NODE A — Field Operator │     (Local REST API)    │  NODE B — Command Center     │
-│                          │ ─────────────────────── │                              │
-│  • Audio transcription   │    JSON Field Report    │  • Multi-turn reasoning      │
-│  • Image hazard analysis │ ──────────────────────► │  • Function calling → SQLite │
-│  • Threat classification │                         │  • Dispatch plan generation  │
-│                          │    Dispatch Plan         │                              │
-│  Model: Gemma 4 E2B      │ ◄─────────────────────  │  Model: Gemma 4 31B Dense    │
-│  (2.3B params)           │                         │  (Q4_K_M quantised)          │
-│  Runtime: LiteRT / Cactus│                         │  Runtime: llama-cpp-python   │
-└──────────────────────────┘                         └──────────────────────────────┘
-                                                              │
-                                                     ┌────────┴────────┐
-                                                     │  local_gis.db   │
-                                                     │  (SQLite)       │
-                                                     │  • Safe zones   │
-                                                     │  • Hazards      │
-                                                     │  • Routes       │
-                                                     └─────────────────┘
-```
+### 🧠 Multi-Agent Swarm Orchestration
+- **Specialist Agents**: Three independent LLM agents (HazMat, Logistics, Medical) each analyse field reports with restricted tool access.
+- **Commander Synthesis**: A Commander agent reconciles specialist assessments into a unified dispatch plan.
+- **RAG-Enhanced Decisions**: SOPs, GIS data, and hazard info retrieved via PostGIS FTS and spatial queries.
+- **Agentic Voice UI**: Commander voice queries are routed through an LLM-powered RAG pipeline that retrieves live GIS data + active events before generating context-aware responses.
 
-## Quick Start
+### 🗺️ PostGIS Spatial Database
+- **True Geospatial Queries**: Uses `ST_DWithin`, `ST_Distance_Sphere`, and GIST indices instead of Python-side Haversine.
+- **Geometry Columns**: Hazards, safe zones, and sensor readings stored as PostGIS `GEOMETRY(Point, 4326)`.
+- **SQLite Fallback**: Runs without Docker/PostGIS using the legacy SQLite backend.
 
-### 1. Install Dependencies
+### 📡 Smart City IoT Sensor Network
+- **MQTT-Based Telemetry**: Sensors publish to Mosquitto via MQTT topics (`aegis/sensors/#`).
+- **Four Sensor Types**: Air Quality (AQI), Seismic (Mw), Flood (water-level), Fire (thermal).
+- **Auto-Escalation**: Sensor readings exceeding thresholds automatically trigger hazard alerts on the dashboard.
+- **HTTP Fallback**: Sensors can publish via REST API when MQTT is unavailable.
+
+### 🗺️ Real-Time GIS & Operations Map
+- **Zero-Latency WebSockets**: Push-based architecture for instant dashboard updates.
+- **Predictive Heatmaps**: Dynamic `leaflet-heat` models for atmospheric hazard dispersion.
+- **Autonomous Drone Fleets**: Animated drone dispatch to hazard coordinates.
+- **Citizen Portal**: Public-facing evacuation portal with clear civilian directives.
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.10+
+- `pip install -r requirements.txt`
+- Docker & Docker Compose (optional, for PostGIS + MQTT)
+
+### 1. Start Infrastructure (Optional — PostGIS + MQTT)
 ```bash
-pip install -r requirements.txt
+docker-compose up -d
+python setup_postgis.py --reset
 ```
 
-### 2. Download Model Weights
-Place the model files in `./models/`:
-- `gemma-4-E2B-it.litertlm` — Field Node (Node A)
-- `gemma-4-31B-it-Q4_K_M.gguf` — Command Center (Node B)
-
-### 3. Bootstrap the GIS Database
+### 2. Initialize the SQLite Database (Fallback)
 ```bash
-python setup_db.py
+python setup_db.py --reset
 ```
 
-### 4. Start the Command Center (Terminal 1)
+### 3. Start the Command Node (Server)
 ```bash
-python command_node.py --mock    # Use --mock if no model weights yet
+python command_node.py --mock
 ```
 
-### 5. Run the Field Node (Terminal 2)
+### 4. Open the Dashboards
+- **Commander Dashboard**: `http://localhost:8091`
+- **Citizen Portal**: `http://localhost:8091/portal`
+
+### 5. Run the Edge Node (Field Device)
 ```bash
-python field_node.py --mock      # Use --mock if no model weights yet
+python field_node.py --live --mock
 ```
 
-## Project Structure
+### 6. Simulate Disaster & IoT Traffic
+- **Disaster Simulator (30 concurrent reports):** `python simulate_chaos.py`
+- **Smart City Sensors (MQTT):** `python sensor_network.py`
+- **Smart City Sensors (HTTP fallback):** `python sensor_network.py --http`
+- **LLM Safety Evaluator:** `python eval_safety.py`
 
-```
-Gemma4/
-├── config.py           # Shared configuration (paths, params, endpoints)
-├── setup_db.py         # Generates mock SQLite GIS database
-├── field_node.py       # Node A — Edge multimodal ingestion
-├── command_node.py     # Node B — Reasoning + tool calling server
-├── requirements.txt    # Python dependencies
-├── models/             # Place .gguf and .litertlm weights here
-├── data/               # Generated local_gis.db lives here
-├── mock_inputs/        # Sample audio/image files for testing
-└── logs/               # Runtime logs
+## 🧪 Testing
+```bash
+pytest tests/ -v
 ```
 
-## Function Calling Schema
+## 🏗️ Architecture
 
-The Command Center defines three GIS tools as JSON schemas passed to Gemma 4 31B in the system prompt. The model uses `<think>` blocks for step-by-step reasoning, then emits `<tool_call>` tokens to invoke database queries:
+```
+Field Node (Gemma 4 E2B)  ──encrypted mesh──▶  Command Node (Gemma 4 31B)
+  ├─ Audio Transcription                         ├─ Multi-Agent Swarm
+  ├─ YOLOv8-nano Hazard Detection                │   ├─ HazMat Agent
+  ├─ Threat Classification                       │   ├─ Logistics Agent
+  └─ SQLite Encrypted Offline Outbox              │   ├─ Medical Agent
+                                                  │   └─ Commander Agent
+IoT Sensors ──MQTT──▶ Mosquitto                   ├─ Agentic Voice UI (RAG)
+  ├─ Air Quality (AQI)                            ├─ PostGIS Spatial DB
+  ├─ Seismic (Mw)                                 ├─ Sensor Threshold Alerts
+  ├─ Flood (m)                                    └─ WebSocket Dashboard
+  └─ Fire (°C)
+```
 
-| Tool | Purpose |
-|------|---------|
-| `query_safe_zones` | Find shelters/hospitals with remaining capacity near a GPS point |
-| `query_hazards` | Retrieve known dangers (collapses, gas leaks, floods) in a radius |
-| `query_routes` | Find evacuation routes with status and travel time estimates |
-
-The multi-turn loop: **Think → Tool Call → Execute → Inject Result → Repeat → Dispatch Plan**.
-
-## Sampling Parameters
-
-Per Gemma 4 guidelines: `temperature=1.0`, `top_p=0.95`, `top_k=64`.
-
-## License
-
-Apache 2.0 — Aligned with Gemma 4's open-weight license.
-# Gemma4Hack

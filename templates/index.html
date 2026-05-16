@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aegis - Crisis Coordinator Dashboard</title>
+    <title>Aegis - Command Center</title>
+    <link rel="icon" href="data:,">
     <!-- External CSS -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
@@ -37,7 +38,7 @@
             <div class="arch-node" id="node-b">
                 <h3>Node B: Command</h3>
                 <p>Gemma 4 31B</p>
-                <div style="margin-top: 10px; font-size: 0.8rem; color: var(--accent);">[Multi-turn Reasoning]</div>
+                <div style="margin-top: 10px; font-size: 0.8rem; color: var(--accent);">[Multi-Agent Swarm]</div>
             </div>
 
             <div class="arch-conn">
@@ -46,9 +47,9 @@
             </div>
 
             <div class="arch-node db" id="node-db">
-                <h3>Local GIS</h3>
-                <p>SQLite DB</p>
-                <div style="margin-top: 10px; font-size: 0.8rem; color: var(--warning);">[Routes, Hazards, Zones]</div>
+                <h3>GIS Database</h3>
+                <p>PostGIS / SQLite</p>
+                <div style="margin-top: 10px; font-size: 0.8rem; color: var(--warning);">[Routes, Hazards, Zones, Sensors]</div>
             </div>
         </div>
     </div>
@@ -69,10 +70,17 @@
         </div>
 
         <!-- Right Panel: AI Reasoning & Dispatch -->
-        <div class="panel">
+        <div class="panel" style="display: flex; flex-direction: column;">
             <h2 class="panel-title">🧠 Gemma 4 Reasoning & Dispatch</h2>
-            <div id="active-dispatch">
+            <div id="active-dispatch" style="flex-grow: 1; overflow-y: auto; margin-bottom: 20px;">
                 <div class="empty-state">Select a report to view the dispatch plan.</div>
+            </div>
+            <div class="card" style="padding: 15px; background: rgba(0,0,0,0.3); border-radius: 8px; border: 1px solid var(--border);">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h2 style="margin:0; font-size: 1.1rem; color: #38bdf8;">Commander Voice Interface</h2>
+                    <button id="ptt-btn" style="background: var(--primary); border: none; padding: 10px 15px; border-radius: 5px; color: white; cursor: pointer; font-weight: bold;">🎤 Push to Talk</button>
+                </div>
+                <div id="voice-transcript" style="margin-top: 15px; font-size: 0.9rem; font-style: italic; color: #94a3b8;">Click the microphone and speak your query...</div>
             </div>
         </div>
     </div>

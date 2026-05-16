@@ -63,6 +63,12 @@ function connectWebSocket() {
     ws.onmessage = function(event) {
         try {
             const data = JSON.parse(event.data);
+            
+            if (data.msg_type === "sensor") {
+                renderSensor(data);
+                return;
+            }
+            
             if (data.events && data.events.length !== window.reportsData.length) {
                 window.reportsData = data.events;
                 renderReportsList();
@@ -145,6 +151,9 @@ function selectReport(index) {
         .addTo(map);
         map.setView([r.location.latitude, r.location.longitude], 14);
         generateHeatmap(r.location.latitude, r.location.longitude, r.category, r.threat_level);
+        
+        // Dispatch autonomous drone for recon
+        dispatchDrone(r.location.latitude, r.location.longitude);
     }
     
     let toolsHtml = '';
@@ -228,6 +237,51 @@ function generateHeatmap(lat, lon, category, severity) {
     }
 }
 
+// Global drone registry
+let drones = [];
+
+function dispatchDrone(targetLat, targetLon) {
+    if (!map) return;
+    
+    const startLat = 46.215; // Mock Command Center coordinates
+    const startLon = -123.810;
+    
+    const droneIcon = L.divIcon({
+        html: '<div style="font-size: 24px; text-shadow: 0 0 10px cyan;">🚁</div>',
+        className: 'drone-icon',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+    });
+
+    const droneMarker = L.marker([startLat, startLon], {icon: droneIcon}).addTo(map);
+    drones.push(droneMarker);
+    
+    const steps = 100;
+    const duration = 3000; 
+    const stepTime = duration / steps;
+    let currentStep = 0;
+    
+    const latStep = (targetLat - startLat) / steps;
+    const lonStep = (targetLon - startLon) / steps;
+    
+    const flyInterval = setInterval(() => {
+        currentStep++;
+        const newLat = startLat + (latStep * currentStep);
+        const newLon = startLon + (lonStep * currentStep);
+        droneMarker.setLatLng([newLat, newLon]);
+        
+        if (currentStep >= steps) {
+            clearInterval(flyInterval);
+            droneMarker.bindPopup("<b>Recon Drone 01</b><br>On station streaming video.").openPopup();
+            
+            // Radar ping effect
+            L.circle([targetLat, targetLon], {
+                color: '#22d3ee', fillColor: '#22d3ee', fillOpacity: 0.2, radius: 150
+            }).addTo(map);
+        }
+    }, stepTime);
+}
+
 function triggerArchitectureAnimation() {
     document.getElementById('node-a').classList.remove('active');
     document.getElementById('node-b').classList.remove('active');
@@ -267,4 +321,84 @@ function triggerArchitectureAnimation() {
         document.getElementById('node-b').classList.remove('active');
         document.getElementById('node-db').classList.remove('active');
     }, 6000);
+}
+
+// Global sensor markers
+let sensorMarkers = {};
+
+function renderSensor(data) {
+    if (!map) return;
+    
+    if (sensorMarkers[data.sensor_id]) {
+        map.removeLayer(sensorMarkers[data.sensor_id]);
+    }
+    
+    let color = '#10b981'; // Green
+    if (data.value > 100) color = '#f59e0b'; // Yellow
+    if (data.value > 200) color = '#ef4444'; // Red
+    
+    const marker = L.circleMarker([data.latitude, data.longitude], {
+        color: color, fillColor: color, fillOpacity: 0.8, radius: 6
+    }).bindPopup(`<b>IoT Sensor: ${data.sensor_id}</b><br>${data.type.toUpperCase()}: ${data.value.toFixed(1)} ${data.unit}`).addTo(map);
+    
+    sensorMarkers[data.sensor_id] = marker;
+}
+
+// Web Speech API for Commander Voice Interface
+const pttBtn = document.getElementById('ptt-btn');
+const voiceTranscript = document.getElementById('voice-transcript');
+
+if (pttBtn) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        
+        pttBtn.addEventListener('click', () => {
+            try {
+                recognition.start();
+                pttBtn.style.background = 'var(--danger)';
+                pttBtn.innerText = '🔴 Listening...';
+                voiceTranscript.innerText = "Listening...";
+            } catch(e) {}
+        });
+        
+        recognition.onresult = async function(event) {
+            const transcript = event.results[0][0].transcript;
+            voiceTranscript.innerHTML = `<strong>You:</strong> "${transcript}"<br><em>Processing...</em>`;
+            
+            try {
+                const resp = await fetch('/api/v1/voice-command', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ text: transcript })
+                });
+                const data = await resp.json();
+                
+                voiceTranscript.innerHTML = `<strong>You:</strong> "${transcript}"<br><strong style="color:var(--success)">Aegis:</strong> "${data.response}"`;
+                
+                const utterance = new SpeechSynthesisUtterance(data.response);
+                window.speechSynthesis.speak(utterance);
+                
+            } catch (e) {
+                voiceTranscript.innerText = "Error processing voice command.";
+            }
+        };
+        
+        recognition.onspeechend = function() {
+            recognition.stop();
+            pttBtn.style.background = 'var(--primary)';
+            pttBtn.innerText = '🎤 Push to Talk';
+        };
+        
+        recognition.onerror = function() {
+            pttBtn.style.background = 'var(--primary)';
+            pttBtn.innerText = '🎤 Push to Talk';
+            voiceTranscript.innerText = "Error accessing microphone.";
+        };
+    } else {
+        pttBtn.style.display = 'none';
+        voiceTranscript.innerText = "Web Speech API not supported in this browser.";
+    }
 }

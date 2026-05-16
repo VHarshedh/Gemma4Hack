@@ -27,3 +27,32 @@ def test_receive_field_report():
     assert data["report_id"] == "test-123"
     assert "dispatch_plan" in data
     assert "status" in data
+
+def test_receive_sensor_data():
+    payload = {
+        "sensor_id": "TEST-AQ-1",
+        "latitude": 46.21,
+        "longitude": -123.82,
+        "type": "air_quality",
+        "value": 150.0,
+        "unit": "AQI"
+    }
+    response = client.post("/api/v1/sensor-data", json=payload)
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+
+def test_voice_command():
+    payload = {"text": "what is the hospital capacity"}
+    response = client.post("/api/v1/voice-command", json=payload)
+    assert response.status_code == 200
+    assert "Cascadia" in response.json()["response"]
+
+def test_portal():
+    response = client.get("/portal")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+def test_websocket():
+    with client.websocket_connect("/api/v1/ws") as websocket:
+        # Test connection succeeds
+        assert websocket is not None
