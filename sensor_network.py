@@ -43,63 +43,29 @@ log = logging.getLogger("aegis.sensors")
 
 # ── Sensor Definitions ───────────────────────────────────────────────
 
+# Fixed sensor positions spread across the Cascadia Bay operational area
+# (~15 km radius) so dots appear clearly separated on the map.
 SENSOR_FLEET = [
-    # Air Quality sensors
-    *[
-        {
-            "id": f"AQ-{100+i}",
-            "lat": 46.21 + random.uniform(-0.015, 0.015),
-            "lon": -123.82 + random.uniform(-0.015, 0.015),
-            "type": "air_quality",
-            "topic": MQTT_TOPIC_AQI,
-            "unit": "AQI",
-            "base_value": random.uniform(120.0, 200.0),
-            "variance": 60.0,
-        }
-        for i in range(5)
-    ],
-    # Seismic sensors
-    *[
-        {
-            "id": f"SZ-{200+i}",
-            "lat": 46.21 + random.uniform(-0.02, 0.02),
-            "lon": -123.82 + random.uniform(-0.02, 0.02),
-            "type": "seismic",
-            "topic": MQTT_TOPIC_SEISMIC,
-            "unit": "Mw",
-            "base_value": random.uniform(2.0, 5.0),
-            "variance": 1.5,
-        }
-        for i in range(3)
-    ],
-    # Flood / water-level gauges
-    *[
-        {
-            "id": f"FL-{300+i}",
-            "lat": 46.22 + random.uniform(-0.005, 0.005),
-            "lon": -123.825 + random.uniform(-0.005, 0.005),
-            "type": "flood",
-            "topic": MQTT_TOPIC_FLOOD,
-            "unit": "m",
-            "base_value": random.uniform(0.3, 1.2),
-            "variance": 0.4,
-        }
-        for i in range(3)
-    ],
-    # Fire / thermal sensors
-    *[
-        {
-            "id": f"FR-{400+i}",
-            "lat": 46.204 + random.uniform(-0.005, 0.005),
-            "lon": -123.807 + random.uniform(-0.005, 0.005),
-            "type": "fire",
-            "topic": MQTT_TOPIC_FIRE,
-            "unit": "°C",
-            "base_value": random.uniform(180.0, 400.0),
-            "variance": 80.0,
-        }
-        for i in range(2)
-    ],
+    # Air Quality — north, south, east, west, centre
+    {"id": "AQ-100", "lat": 46.330, "lon": -123.820, "type": "air_quality", "topic": MQTT_TOPIC_AQI,      "unit": "AQI", "base_value": 145.0, "variance": 60.0},  # North
+    {"id": "AQ-101", "lat": 46.090, "lon": -123.820, "type": "air_quality", "topic": MQTT_TOPIC_AQI,      "unit": "AQI", "base_value": 175.0, "variance": 60.0},  # South
+    {"id": "AQ-102", "lat": 46.210, "lon": -123.600, "type": "air_quality", "topic": MQTT_TOPIC_AQI,      "unit": "AQI", "base_value": 130.0, "variance": 60.0},  # East
+    {"id": "AQ-103", "lat": 46.210, "lon": -124.040, "type": "air_quality", "topic": MQTT_TOPIC_AQI,      "unit": "AQI", "base_value": 190.0, "variance": 60.0},  # West (coast)
+    {"id": "AQ-104", "lat": 46.210, "lon": -123.820, "type": "air_quality", "topic": MQTT_TOPIC_AQI,      "unit": "AQI", "base_value": 155.0, "variance": 60.0},  # Centre
+
+    # Seismic — fault line running NW–SE
+    {"id": "SZ-200", "lat": 46.320, "lon": -124.010, "type": "seismic",     "topic": MQTT_TOPIC_SEISMIC,  "unit": "Mw",  "base_value": 2.5,   "variance": 1.5},   # NW
+    {"id": "SZ-201", "lat": 46.210, "lon": -123.820, "type": "seismic",     "topic": MQTT_TOPIC_SEISMIC,  "unit": "Mw",  "base_value": 3.8,   "variance": 1.5},   # Centre
+    {"id": "SZ-202", "lat": 46.100, "lon": -123.630, "type": "seismic",     "topic": MQTT_TOPIC_SEISMIC,  "unit": "Mw",  "base_value": 2.1,   "variance": 1.5},   # SE
+
+    # Flood gauges — river network (north branch, south branch, estuary)
+    {"id": "FL-300", "lat": 46.290, "lon": -123.750, "type": "flood",       "topic": MQTT_TOPIC_FLOOD,    "unit": "m",   "base_value": 0.8,   "variance": 0.4},   # North river
+    {"id": "FL-301", "lat": 46.150, "lon": -123.870, "type": "flood",       "topic": MQTT_TOPIC_FLOOD,    "unit": "m",   "base_value": 1.1,   "variance": 0.4},   # South river
+    {"id": "FL-302", "lat": 46.180, "lon": -124.000, "type": "flood",       "topic": MQTT_TOPIC_FLOOD,    "unit": "m",   "base_value": 0.5,   "variance": 0.4},   # Coastal estuary
+
+    # Fire/thermal — industrial zone (east) and forest edge (north-west)
+    {"id": "FR-400", "lat": 46.250, "lon": -123.650, "type": "fire",        "topic": MQTT_TOPIC_FIRE,     "unit": "°C",  "base_value": 320.0, "variance": 80.0},  # Industrial east
+    {"id": "FR-401", "lat": 46.280, "lon": -124.020, "type": "fire",        "topic": MQTT_TOPIC_FIRE,     "unit": "°C",  "base_value": 210.0, "variance": 80.0},  # Forest NW
 ]
 
 
@@ -191,7 +157,15 @@ def main():
     if args.http:
         asyncio.run(stream_http())
     else:
-        asyncio.run(stream_mqtt())
+        # aiomqtt/paho-mqtt use add_reader/add_writer which are only supported
+        # by SelectorEventLoop. On Windows asyncio defaults to ProactorEventLoop,
+        # so we explicitly create a SelectorEventLoop for MQTT mode.
+        loop = asyncio.SelectorEventLoop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(stream_mqtt())
+        finally:
+            loop.close()
 
 
 if __name__ == "__main__":

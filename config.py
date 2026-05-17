@@ -27,11 +27,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # Node A – Gemma 4 E2B (2.3B effective params, multimodal edge model)
 #   Supports native audio transcription + image understanding.
 #   Expected format: LiteRT LM package (.litertlm)
-FIELD_MODEL_PATH = PROJECT_ROOT / "models" / "gemma-4-E2B-it.litertlm"
+FIELD_MODEL_PATH = Path(
+    os.getenv("FIELD_MODEL_PATH", str(PROJECT_ROOT / "models" / "gemma-4-E2B-it.litertlm"))
+)
 
-# Node B – Gemma 4 31B Dense (quantised GGUF for llama.cpp)
+# Node B – Gemma 4 27B Dense (quantised GGUF for llama.cpp)
 #   Full-power model for reasoning, tool use, and dispatch planning.
-COMMAND_MODEL_PATH = PROJECT_ROOT / "models" / "gemma-4-31B-it-Q4_K_M.gguf"
+#   Recommended hardware: 16GB+ VRAM (GPU) or 32GB+ RAM (CPU-only).
+COMMAND_MODEL_PATH = Path(
+    os.getenv("COMMAND_MODEL_PATH", str(PROJECT_ROOT / "models" / "gemma-4-27B-it-Q4_K_M.gguf"))
+)
+
+# Node B – Gemma 4 E2B (GGUF format, same family — lite mode)
+#   Use with --lite flag on machines with limited RAM/GPU.
+#   Requires ~1.5 GB RAM, runs fully on CPU. Still 100% Gemma 4.
+#   Download: https://huggingface.co/google/gemma-4-E2B-it-GGUF
+COMMAND_MODEL_PATH_LITE = Path(
+    os.getenv("COMMAND_MODEL_PATH_LITE", str(PROJECT_ROOT / "models" / "gemma-4-E2B-it-Q4_K_M.gguf"))
+)
 
 # ──────────────────────────────────────────────────────────────────────
 # Gemma 4 Sampling Parameters  (official recommended defaults)
@@ -91,6 +104,22 @@ AGENT_SPECIALISTS = ["hazmat", "logistics", "medical"]
 # ──────────────────────────────────────────────────────────────────────
 MOCK_AUDIO_PATH = PROJECT_ROOT / "mock_inputs" / "sample_report.wav"
 MOCK_IMAGE_PATH = PROJECT_ROOT / "mock_inputs" / "sample_hazard.jpg"
+
+# ──────────────────────────────────────────────────────────────────────
+# Ollama  (optional backend — runs any Gemma 4 model via local Ollama)
+# ──────────────────────────────────────────────────────────────────────
+# Install Ollama: https://ollama.com
+#
+# Model options (pick one based on available RAM):
+#   gemma4:e2b                  → 7.2 GB  (official Q4_K_M, needs 8+ GB free)
+#   batiai/gemma4-e2b:q4        → 3.4 GB  (community repack, fits in 4 GB free)
+#   batiai/gemma4-e2b:q6        → 3.8 GB  (higher quality, still tight at 4 GB)
+#   cajina/gemma4_e2b-q4_k_s:v01→ 3.0 GB  (thinking stripped, 4096-token ctx only)
+#   gemma4:27b                  → 18  GB  (GPU recommended)
+#
+# Pull with:  ollama pull batiai/gemma4-e2b:q4
+OLLAMA_HOST  = os.getenv("OLLAMA_HOST",  "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "batiai/gemma4-e2b:q4")
 
 # ──────────────────────────────────────────────────────────────────────
 # Logging

@@ -149,7 +149,16 @@ SOPS = [
 
 def create_database(*, reset: bool = False) -> None:
     """Create PostGIS schema and seed data."""
-    conn = psycopg2.connect(PG_DSN)
+    try:
+        conn = psycopg2.connect(PG_DSN)
+    except psycopg2.OperationalError:
+        print(
+            "\n[postgis] ERROR: Cannot connect to PostgreSQL at "
+            f"{PG_DSN.split('password=')[0]}***\n"
+            "  Make sure the PostGIS container is running:\n"
+            "    docker compose up -d gis-db\n"
+        )
+        raise SystemExit(1)
     conn.autocommit = True
     cur = conn.cursor()
 

@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Runtime-generated media (field node live captures)
+live_audio.wav
+live_audio.txt
+live_image.jpg
+
+# Model weights (large binary files — download separately)
+models/*.gguf
+models/*.litertlm
+models/*.pt
+
+# Databases (runtime data)
+data/local_gis.db
+data/mesh_queue.db
+
+# Logs
+logs/
+*.log
+
+# Environment / secrets
+.env
+.env.*
+
+# pytest
+.pytest_cache/
+tests/__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db

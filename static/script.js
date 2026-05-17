@@ -323,25 +323,79 @@ function triggerArchitectureAnimation() {
     }, 6000);
 }
 
-// Global sensor markers
+// Global sensor markers and latest readings
 let sensorMarkers = {};
+let sensorReadings = {};
+
+const SENSOR_THRESHOLDS = {
+    air_quality: { warning: 100, critical: 200 }, // AQI: 0-50 Good, 51-100 Moderate, 101-200 Unhealthy, 201+ Very Unhealthy/Hazardous
+    seismic:     { warning: 3.5, critical: 5.0 }, // Mw: 3.5 felt/minor damage, 5.0+ significant damage
+    flood:       { warning: 0.8, critical: 1.5 }, // metres above normal: 0.8 watch, 1.5 danger
+    fire:        { warning: 250, critical: 400 }, // °C: 250 active fire, 400 extreme/structure threat
+};
+
+const SENSOR_ICONS = { air_quality: '💨', seismic: '🌍', flood: '🌊', fire: '🔥' };
+
+function sensorStatus(type, value) {
+    const t = SENSOR_THRESHOLDS[type];
+    if (!t) return 'normal';
+    if (value >= t.critical) return 'critical';
+    if (value >= t.warning)  return 'warning';
+    return 'normal';
+}
 
 function renderSensor(data) {
-    if (!map) return;
-    
-    if (sensorMarkers[data.sensor_id]) {
-        map.removeLayer(sensorMarkers[data.sensor_id]);
+    // ── Map dot ──────────────────────────────────────────────
+    if (map) {
+        if (sensorMarkers[data.sensor_id]) map.removeLayer(sensorMarkers[data.sensor_id]);
+        const status = sensorStatus(data.type, data.value);
+        const color = status === 'critical' ? '#ef4444' : status === 'warning' ? '#f59e0b' : '#10b981';
+        const radius = status === 'critical' ? 9 : status === 'warning' ? 7 : 5;
+        const marker = L.circleMarker([data.latitude, data.longitude], {
+            color, fillColor: color, fillOpacity: 0.85, radius,
+            weight: status === 'critical' ? 2 : 1,
+        }).bindPopup(
+            `<b>${SENSOR_ICONS[data.type] || '📡'} ${data.sensor_id}</b><br>` +
+            `${data.type.replace(/_/g,' ').toUpperCase()}: <b>${data.value.toFixed(2)} ${data.unit}</b><br>` +
+            `Status: <b style="color:${color}">${status.toUpperCase()}</b>`
+        ).addTo(map);
+        sensorMarkers[data.sensor_id] = marker;
     }
-    
-    let color = '#10b981'; // Green
-    if (data.value > 100) color = '#f59e0b'; // Yellow
-    if (data.value > 200) color = '#ef4444'; // Red
-    
-    const marker = L.circleMarker([data.latitude, data.longitude], {
-        color: color, fillColor: color, fillOpacity: 0.8, radius: 6
-    }).bindPopup(`<b>IoT Sensor: ${data.sensor_id}</b><br>${data.type.toUpperCase()}: ${data.value.toFixed(1)} ${data.unit}`).addTo(map);
-    
-    sensorMarkers[data.sensor_id] = marker;
+
+    // ── Sidebar panel ────────────────────────────────────────
+    sensorReadings[data.sensor_id] = data;
+    renderSensorPanel();
+}
+
+function renderSensorPanel() {
+    let panel = document.getElementById('sensor-panel');
+    if (!panel) return;
+
+    const grouped = {};
+    Object.values(sensorReadings).forEach(r => {
+        if (!grouped[r.type]) grouped[r.type] = [];
+        grouped[r.type].push(r);
+    });
+
+    panel.innerHTML = Object.entries(grouped).map(([type, sensors]) => {
+        const icon = SENSOR_ICONS[type] || '📡';
+        const rows = sensors.map(s => {
+            const status = sensorStatus(s.type, s.value);
+            const color  = status === 'critical' ? '#ef4444' : status === 'warning' ? '#f59e0b' : '#10b981';
+            const badge  = status !== 'normal'
+                ? `<span style="background:${color};color:#fff;font-size:0.65rem;padding:1px 5px;border-radius:3px;margin-left:4px">${status.toUpperCase()}</span>`
+                : '';
+            return `<div style="display:flex;justify-content:space-between;align-items:center;
+                        padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:0.82rem">
+                      <span style="color:#94a3b8">${s.sensor_id}</span>
+                      <span style="color:${color};font-weight:600">${s.value.toFixed(2)} ${s.unit}${badge}</span>
+                    </div>`;
+        }).join('');
+        return `<div style="margin-bottom:10px">
+                  <div style="font-weight:600;color:#38bdf8;margin-bottom:4px">${icon} ${type.replace(/_/g,' ').toUpperCase()}</div>
+                  ${rows}
+                </div>`;
+    }).join('') || '<div style="color:#94a3b8;font-style:italic;font-size:0.85rem">No sensor data yet…</div>';
 }
 
 // Web Speech API for Commander Voice Interface

@@ -1,39 +1,20 @@
 """
-Aegis — Multi-Agent Swarm Orchestration (Phase 1)
-===================================================
-Replaces the single-prompt reasoning loop with a true multi-agent
-debate architecture.  Three specialist agents (HazMat, Logistics,
-Medical) each independently analyse the field report, then a
-Commander agent synthesises their assessments into the final
-dispatch plan.
-
-Architecture
-------------
-  1. Field report is broadcast to all specialist agents.
-  2. Each agent runs its own tool-calling loop against the GIS DB,
-     restricted to its domain-relevant tools.
-  3. Specialist assessments are collected.
-  4. A Commander agent receives all assessments and produces the
-     final DISPATCH PLAN.
-
-This module provides ``MultiAgentEngine`` as a drop-in replacement
-for ``ReasoningEngine`` in command_node.py.
+Aegis — Multi-Agent Swarm Orchestration
+=======================================
+Multi-agent debate architecture for crisis coordination.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import textwrap
 import time
 
 from config import AGENT_SPECIALISTS
+from core.gis_tools import TOOL_DEFINITIONS
 
-log = logging.getLogger("aegis.swarm")
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  Specialist Agent Prompts
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+log = logging.getLogger("aegis.core.multi_agent")
 
 SPECIALIST_PROMPTS: dict[str, str] = {
     "hazmat": textwrap.dedent("""\
@@ -91,7 +72,6 @@ COMMANDER_PROMPT = textwrap.dedent("""\
     # 🚨 AEGIS MULTI-AGENT DISPATCH PLAN
 """)
 
-# Maps each specialist to the tool names it is allowed to call.
 AGENT_TOOL_ACCESS: dict[str, set[str]] = {
     "hazmat":    {"query_hazards", "query_sop"},
     "logistics": {"query_safe_zones", "query_routes"},
@@ -99,15 +79,10 @@ AGENT_TOOL_ACCESS: dict[str, set[str]] = {
 }
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  Mock Multi-Agent Backend
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 class MockSpecialistBackend:
     """Deterministic mock that returns realistic per-agent assessments."""
 
     def generate_assessment(self, agent_name: str, report: dict, tool_results: list[dict]) -> str:
-        """Generate a mock specialist assessment."""
         if agent_name == "hazmat":
             return textwrap.dedent("""\
                 [HAZMAT ASSESSMENT]
@@ -137,17 +112,8 @@ class MockSpecialistBackend:
             """)
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  Multi-Agent Engine
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 class MultiAgentEngine:
-    """
-    Multi-agent orchestrator that fans out analysis to specialist agents,
-    then synthesises their outputs via a Commander agent.
-
-    Drop-in compatible with ReasoningEngine.process_report().
-    """
+    """Multi-agent orchestrator."""
 
     MAX_TOOL_ROUNDS = 3
 
@@ -160,16 +126,13 @@ class MultiAgentEngine:
         log.info("Multi-Agent Swarm Engine initialised (agents: %s)", AGENT_SPECIALISTS)
 
     def _run_specialist(self, agent_name: str, report: dict) -> dict:
-        """Run a single specialist agent's analysis loop."""
         t0 = time.perf_counter()
         allowed_tools = AGENT_TOOL_ACCESS.get(agent_name, set())
 
         if self.use_mock:
-            # Use domain-specific mock tool calls for realistic output
             tool_results = self._mock_tool_calls(agent_name, report)
             assessment = self._mock.generate_assessment(agent_name, report, tool_results)
         else:
-            # Real LLM loop
             assessment, tool_results = self._llm_agent_loop(agent_name, report, allowed_tools)
 
         elapsed = time.perf_counter() - t0
@@ -184,7 +147,6 @@ class MultiAgentEngine:
         }
 
     def _mock_tool_calls(self, agent_name: str, report: dict) -> list[dict]:
-        """Execute realistic tool calls for mock mode."""
         lat = report.get("location", {}).get("latitude", 46.2088)
         lon = report.get("location", {}).get("longitude", -123.8156)
         results = []
@@ -206,11 +168,9 @@ class MultiAgentEngine:
         return results
 
     def _llm_agent_loop(self, agent_name: str, report: dict, allowed_tools: set[str]) -> tuple[str, list[dict]]:
-        """Run the real LLM tool-calling loop for a specialist."""
         import re
         TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
-        from core.gis_tools import TOOL_DEFINITIONS
         agent_tools = [t for t in TOOL_DEFINITIONS if t["function"]["name"] in allowed_tools]
         sys_prompt = SPECIALIST_PROMPTS[agent_name] + f"\n\nAvailable tools:\n{json.dumps(agent_tools, indent=2)}"
 
@@ -248,7 +208,6 @@ class MultiAgentEngine:
         return response, tool_log
 
     def _synthesise_dispatch(self, report: dict, assessments: list[dict]) -> str:
-        """Commander agent synthesises specialist outputs into a dispatch plan."""
         if self.use_mock:
             return self._mock_dispatch(assessments)
 
@@ -260,7 +219,6 @@ class MultiAgentEngine:
         return self.llm.generate(messages)
 
     def _mock_dispatch(self, assessments: list[dict]) -> str:
-        """Generate the final mock dispatch plan from agent assessments."""
         return textwrap.dedent("""\
             # 🚨 AEGIS MULTI-AGENT DISPATCH PLAN — PRIORITY: CRITICAL
 
@@ -297,26 +255,32 @@ class MultiAgentEngine:
         """)
 
     def process_report(self, report: dict) -> dict:
-        """
-        Process a field report through the multi-agent swarm.
-
-        Returns the same dict shape as ReasoningEngine.process_report().
-        """
         t0 = time.perf_counter()
         log.info("=== Multi-Agent Swarm Processing ===")
+        log.info("Dispatching all specialist agents in parallel …")
 
-        # Fan out to specialists
-        assessments = []
-        all_tool_calls = []
-        for agent_name in AGENT_SPECIALISTS:
-            log.info("Dispatching to [%s] agent …", agent_name.upper())
-            result = self._run_specialist(agent_name, report)
-            assessments.append(result)
-            all_tool_calls.extend(
-                {"agent": agent_name, **tc} for tc in result["tool_calls"]
-            )
+        # Run all specialist agents concurrently — cuts total time from
+        # (n_agents × inference_time) down to (1 × inference_time).
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(AGENT_SPECIALISTS), thread_name_prefix="agent"
+        ) as pool:
+            futures = {
+                pool.submit(self._run_specialist, name, report): name
+                for name in AGENT_SPECIALISTS
+            }
+            agent_results = {}
+            for future in concurrent.futures.as_completed(futures):
+                name = futures[future]
+                agent_results[name] = future.result()
 
-        # Commander synthesis
+        # Preserve original agent ordering for the commander prompt
+        assessments = [agent_results[name] for name in AGENT_SPECIALISTS]
+        all_tool_calls = [
+            {"agent": a["agent"], **tc}
+            for a in assessments
+            for tc in a["tool_calls"]
+        ]
+
         log.info("Commander agent synthesising dispatch plan …")
         dispatch_plan = self._synthesise_dispatch(report, assessments)
 

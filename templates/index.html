@@ -37,7 +37,7 @@
 
             <div class="arch-node" id="node-b">
                 <h3>Node B: Command</h3>
-                <p>Gemma 4 31B</p>
+                <p>{{ llm_label }}</p>
                 <div style="margin-top: 10px; font-size: 0.8rem; color: var(--accent);">[Multi-Agent Swarm]</div>
             </div>
 
@@ -55,11 +55,17 @@
     </div>
 
     <div class="container">
-        <!-- Left Panel: Incoming Reports -->
-        <div class="panel reports-panel">
+        <!-- Left Panel: Incoming Reports + Live Sensors -->
+        <div class="panel reports-panel" style="display:flex;flex-direction:column;">
             <h2 class="panel-title">📡 Incoming Field Reports</h2>
-            <div id="reports-list">
+            <div id="reports-list" style="flex:1;overflow-y:auto;">
                 <div class="empty-state">Waiting for field reports...</div>
+            </div>
+            <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px;">
+                <h2 class="panel-title" style="margin-bottom:10px;">🛰️ Live IoT Sensor Feed</h2>
+                <div id="sensor-panel" style="max-height:220px;overflow-y:auto;">
+                    <div style="color:#94a3b8;font-style:italic;font-size:0.85rem">No sensor data yet…</div>
+                </div>
             </div>
         </div>
 
