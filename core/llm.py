@@ -152,8 +152,8 @@ class OllamaBackend:
     """
 
     # One global semaphore shared across all OllamaBackend instances.
-    # CPU Ollama processes requests serially — concurrent calls just queue up
-    # and hit the timeout. The semaphore makes agents wait their turn instead.
+    # Kept at 1 so only one LLM call reaches Ollama at a time — prevents
+    # multiple context allocations from blowing RAM on CPU-only machines.
     _semaphore: threading.Semaphore = threading.Semaphore(1)
 
     def __init__(self, model: str = OLLAMA_MODEL, host: str = OLLAMA_HOST):

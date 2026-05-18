@@ -5,7 +5,6 @@ Multi-agent debate architecture for crisis coordination.
 """
 from __future__ import annotations
 
-import concurrent.futures
 import json
 import logging
 import textwrap
@@ -128,6 +127,7 @@ class MultiAgentEngine:
     def _run_specialist(self, agent_name: str, report: dict) -> dict:
         t0 = time.perf_counter()
         allowed_tools = AGENT_TOOL_ACCESS.get(agent_name, set())
+        report_id = report.get("report_id", "unknown")
 
         if self.use_mock:
             tool_results = self._mock_tool_calls(agent_name, report)
@@ -136,8 +136,8 @@ class MultiAgentEngine:
             assessment, tool_results = self._llm_agent_loop(agent_name, report, allowed_tools)
 
         elapsed = time.perf_counter() - t0
-        log.info("[%s] Assessment complete in %.2fs (%d tool calls)",
-                 agent_name.upper(), elapsed, len(tool_results))
+        log.info("[%s] [%s] Assessment complete in %.2fs (%d tool calls)",
+                 agent_name.upper(), report_id, elapsed, len(tool_results))
 
         return {
             "agent": agent_name,
@@ -167,12 +167,24 @@ class MultiAgentEngine:
 
         return results
 
+    _TOOL_CALL_FORMAT = (
+        "\n\nTo call a tool respond with EXACTLY this XML tag on its own line "
+        "(replace placeholders, use valid JSON for arguments):\n"
+        "<tool_call>{\"name\": \"<function_name>\", \"arguments\": {\"param\": value}}</tool_call>\n\n"
+        "Always call at least one tool before providing your final assessment. "
+        "After receiving the tool result, give your concise bullet-point assessment."
+    )
+
     def _llm_agent_loop(self, agent_name: str, report: dict, allowed_tools: set[str]) -> tuple[str, list[dict]]:
         import re
         TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
         agent_tools = [t for t in TOOL_DEFINITIONS if t["function"]["name"] in allowed_tools]
-        sys_prompt = SPECIALIST_PROMPTS[agent_name] + f"\n\nAvailable tools:\n{json.dumps(agent_tools, indent=2)}"
+        sys_prompt = (
+            SPECIALIST_PROMPTS[agent_name]
+            + f"\n\nAvailable tools (call at least one):\n{json.dumps(agent_tools, indent=2)}"
+            + self._TOOL_CALL_FORMAT
+        )
 
         user_msg = (
             f"FIELD REPORT — {report.get('threat_level', 'UNKNOWN').upper()}\n"
@@ -205,7 +217,11 @@ class MultiAgentEngine:
             messages.append({"role": "assistant", "content": response})
             messages.append({"role": "user", "content": f"<tool_response>\n{json.dumps(result, indent=2, default=str)}\n</tool_response>"})
 
-        return response, tool_log
+        # MAX_TOOL_ROUNDS exhausted — last response is still a tool call, not an assessment.
+        # Ask the model for a final text assessment so the Commander gets usable input.
+        messages.append({"role": "user", "content": "Provide your final concise bullet-point assessment now. Do not call any more tools."})
+        final_response = self.llm.generate(messages)
+        return final_response, tool_log
 
     def _synthesise_dispatch(self, report: dict, assessments: list[dict]) -> str:
         if self.use_mock:
@@ -254,24 +270,43 @@ class MultiAgentEngine:
             - ⚠️ Masks REQUIRED on Route Golf (chemical spill proximity)
         """)
 
-    def process_report(self, report: dict) -> dict:
+    def process_report(self, report: dict, progress_cb=None) -> dict:
         t0 = time.perf_counter()
-        log.info("=== Multi-Agent Swarm Processing ===")
-        log.info("Dispatching all specialist agents in parallel …")
+        report_id = report.get("report_id", "unknown")
+        log.info("=== Multi-Agent Swarm Processing [%s] ===", report_id)
+        log.info("[%s] Running specialist agents sequentially: %s",
+                 report_id, " → ".join(AGENT_SPECIALISTS))
 
-        # Run all specialist agents concurrently — cuts total time from
-        # (n_agents × inference_time) down to (1 × inference_time).
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(AGENT_SPECIALISTS), thread_name_prefix="agent"
-        ) as pool:
-            futures = {
-                pool.submit(self._run_specialist, name, report): name
-                for name in AGENT_SPECIALISTS
-            }
-            agent_results = {}
-            for future in concurrent.futures.as_completed(futures):
-                name = futures[future]
-                agent_results[name] = future.result()
+        def _notify(update: dict):
+            if progress_cb:
+                try:
+                    progress_cb(update)
+                except Exception:
+                    pass
+
+        # Run specialists one by one in declared order (hazmat → logistics → medical).
+        # OllamaBackend._semaphore is Semaphore(1), so only one LLM call runs at a
+        # time regardless — the thread pool bought no parallelism, only overhead and
+        # random ordering.  Sequential execution is cleaner, faster to start, and
+        # produces deterministic logs.
+        agent_results: dict = {}
+        for name in AGENT_SPECIALISTS:
+            try:
+                agent_results[name] = self._run_specialist(name, report)
+            except Exception as exc:
+                log.error("[%s] [%s] Specialist failed: %s", name.upper(), report_id, exc)
+                agent_results[name] = {
+                    "agent": name,
+                    "assessment": f"[{name.upper()} ASSESSMENT — UNAVAILABLE due to error: {exc}]",
+                    "tool_calls": [],
+                    "processing_time_s": 0.0,
+                }
+            _notify({
+                "stage": "specialist_done",
+                "agent": name,
+                "tool_calls": len(agent_results[name]["tool_calls"]),
+                "processing_time_s": agent_results[name]["processing_time_s"],
+            })
 
         # Preserve original agent ordering for the commander prompt
         assessments = [agent_results[name] for name in AGENT_SPECIALISTS]
@@ -281,7 +316,8 @@ class MultiAgentEngine:
             for tc in a["tool_calls"]
         ]
 
-        log.info("Commander agent synthesising dispatch plan …")
+        log.info("[%s] Commander agent synthesising dispatch plan …", report_id)
+        _notify({"stage": "commander_start"})
         dispatch_plan = self._synthesise_dispatch(report, assessments)
 
         elapsed = time.perf_counter() - t0

@@ -3,6 +3,7 @@ let map;
 let markersLayer;
 let currentReportMarker = null;
 let currentHeatmapLayer = null;
+let selectedReportIndex = null;
 
 async function initMap() {
     map = L.map('map').setView([46.21, -123.82], 13);
@@ -63,17 +64,35 @@ function connectWebSocket() {
     ws.onmessage = function(event) {
         try {
             const data = JSON.parse(event.data);
-            
+
             if (data.msg_type === "sensor") {
                 renderSensor(data);
                 return;
             }
-            
-            if (data.events && data.events.length !== window.reportsData.length) {
+
+            if (data.events) {
+                const prevData = window.reportsData || [];
+                const isNewReport = data.events.length !== prevData.length;
+
+                // Track which reports just flipped to resolved so we can flash them
+                const newlyResolved = new Set();
+                data.events.forEach((e, i) => {
+                    const prev = prevData[i];
+                    const wasProcessing = !prev || prev.result?.status === 'processing';
+                    const nowDone = e.result?.status && e.result.status !== 'processing';
+                    if (wasProcessing && nowDone) newlyResolved.add(i);
+                });
+
                 window.reportsData = data.events;
-                renderReportsList();
-                if (window.reportsData.length > 0) {
-                    selectReport(0); // Auto-select latest
+                renderReportsList(newlyResolved);
+
+                // Auto-select only when a brand-new report arrives
+                if (isNewReport && window.reportsData.length > 0) {
+                    selectReport(window.reportsData.length - 1);
+                } else if (selectedReportIndex !== null) {
+                    // Refresh dispatch panel on any change to the selected report
+                    // (specialist done, commander start, or final resolution)
+                    refreshDispatchPanel(selectedReportIndex);
                 }
             }
         } catch (e) {
@@ -87,41 +106,101 @@ function connectWebSocket() {
     };
 }
 
+// Polling fallback — catches any updates missed by WebSocket
+// (e.g. mid-inference when WS briefly disconnects or browser tab was hidden)
+function startPolling() {
+    setInterval(async () => {
+        try {
+            const resp = await fetch('/api/v1/events');
+            const data = await resp.json();
+            if (!data.events) return;
+
+            const prevData = window.reportsData || [];
+            const changed =
+                data.events.length !== prevData.length ||
+                JSON.stringify(data.events.map(e => e.result?.status)) !==
+                JSON.stringify(prevData.map(e => e.result?.status)) ||
+                JSON.stringify(data.events.map(e => Object.keys(e.result?.agent_progress || {}).length)) !==
+                JSON.stringify(prevData.map(e => Object.keys(e.result?.agent_progress || {}).length));
+
+            if (!changed) return;
+
+            const newlyResolved = new Set();
+            data.events.forEach((e, i) => {
+                const prev = prevData[i];
+                const wasProcessing = !prev || ['processing', 'synthesising', undefined].includes(prev.result?.status);
+                const nowDone = e.result?.status && !['processing', 'synthesising'].includes(e.result.status);
+                if (wasProcessing && nowDone) newlyResolved.add(i);
+            });
+
+            window.reportsData = data.events;
+            renderReportsList(newlyResolved);
+
+            if (selectedReportIndex !== null) {
+                const cur = data.events[selectedReportIndex];
+                if (cur) refreshDispatchPanel(selectedReportIndex);
+            }
+        } catch (e) { /* silent — WS is primary */ }
+    }, 8000);
+}
+
 // Initial render logic
 document.addEventListener("DOMContentLoaded", () => {
     initMap();
     if (window.reportsData && window.reportsData.length > 0) {
         renderReportsList();
-        selectReport(0);
+        selectReport(window.reportsData.length - 1);
     }
     connectWebSocket();
+    startPolling();
 });
 
-function renderReportsList() {
+function statusBadgeHtml(result) {
+    const status = result?.status;
+    if (!status || status === 'processing') {
+        const done = Object.keys(result?.agent_progress || {}).length;
+        const label = done > 0 ? `Processing (${done}/3 agents done)` : 'Processing';
+        return `<span class="status-badge processing"><span class="pulse-dot"></span>${label}</span>`;
+    }
+    if (status === 'synthesising') {
+        return `<span class="status-badge processing"><span class="pulse-dot"></span>Commander synthesising…</span>`;
+    }
+    if (status === 'error') {
+        return `<span class="status-badge error">❌ Error</span>`;
+    }
+    // 'success' or 'max_rounds_reached' — both count as resolved
+    const secs = result.processing_time_s ? ` · ${result.processing_time_s}s` : '';
+    return `<span class="status-badge resolved">✅ Resolved${secs}</span>`;
+}
+
+function renderReportsList(newlyResolved = new Set()) {
     const listEl = document.getElementById('reports-list');
     if (!window.reportsData || window.reportsData.length === 0) return;
-    
+
     listEl.innerHTML = '';
-    
+
     // Reverse so newest is on top
     [...window.reportsData].reverse().forEach((event, index) => {
         const r = event.report;
         const actualIndex = window.reportsData.length - 1 - index;
-        
+
         const threatClass = (r.threat_level || 'unknown').toLowerCase();
-        
+
         const card = document.createElement('div');
-        card.className = `report-card ${threatClass}`;
+        card.className = `report-card ${threatClass}${newlyResolved.has(actualIndex) ? ' just-resolved' : ''}`;
         card.onclick = () => selectReport(actualIndex);
-        
+
         card.innerHTML = `
-            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                 <strong>${r.operator_id}</strong>
                 <span style="font-size:0.8rem; color:var(--text-muted)">${new Date(r.timestamp).toLocaleTimeString()}</span>
             </div>
-            <div>
-                <span class="tag ${threatClass}">${(r.threat_level || 'UNKNOWN').toUpperCase()}</span>
-                <span class="tag" style="background:#334155;">${(r.category || '').replace(/_/g, ' ')}</span>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                <div>
+                    <span class="tag ${threatClass}">${(r.threat_level || 'UNKNOWN').toUpperCase()}</span>
+                    <span class="tag" style="background:#334155;">${(r.category || '').replace(/_/g, ' ')}</span>
+                </div>
+                ${statusBadgeHtml(event.result)}
             </div>
             <div style="margin-top:10px; font-size:0.9rem; color:var(--text-muted)">
                 ${(r.audio_transcript || '').substring(0, 60)}...
@@ -131,70 +210,145 @@ function renderReportsList() {
     });
 }
 
+function buildDispatchHtml(r, res) {
+    const status = res?.status;
+
+    // ── Processing / synthesising state ─────────────────────────
+    if (!status || status === 'processing' || status === 'synthesising') {
+        const agentProgress = res?.agent_progress || {};
+        const agentDefs = [
+            { key: 'hazmat',    icon: '☣️',  label: 'HazMat' },
+            { key: 'logistics', icon: '🗺️',  label: 'Logistics' },
+            { key: 'medical',   icon: '🏥',  label: 'Medical' },
+        ];
+
+        const agentRows = agentDefs.map(({ key, icon, label }) => {
+            const done = agentProgress[key];
+            if (done) {
+                return `
+                <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border);">
+                    <span style="font-size:1.2rem">${icon}</span>
+                    <span style="flex:1; font-weight:600;">${label}</span>
+                    <span style="color:var(--success);">✅ Done</span>
+                    <span style="color:var(--text-muted); font-size:0.8rem;">${done.processing_time_s}s · ${done.tool_calls} tool call${done.tool_calls !== 1 ? 's' : ''}</span>
+                </div>`;
+            }
+            return `
+            <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border);">
+                <span style="font-size:1.2rem">${icon}</span>
+                <span style="flex:1; font-weight:600; color:var(--text-muted);">${label}</span>
+                <span class="status-badge processing" style="font-size:0.72rem;"><span class="pulse-dot"></span>Running</span>
+            </div>`;
+        }).join('');
+
+        const commanderRow = status === 'synthesising'
+            ? `<div style="display:flex; align-items:center; gap:10px; padding:10px 0;">
+                <span style="font-size:1.2rem">🧠</span>
+                <span style="flex:1; font-weight:600;">Commander</span>
+                <span class="status-badge processing" style="font-size:0.72rem;"><span class="pulse-dot"></span>Synthesising plan…</span>
+               </div>`
+            : `<div style="display:flex; align-items:center; gap:10px; padding:10px 0; color:var(--text-muted);">
+                <span style="font-size:1.2rem">🧠</span>
+                <span style="flex:1;">Commander</span>
+                <span style="font-size:0.8rem;">Waiting for specialists…</span>
+               </div>`;
+
+        return `
+        <div style="margin-bottom:20px; padding:15px; background:rgba(0,0,0,0.2); border-radius:8px;">
+            <h3 style="margin-top:0; color:var(--accent)">Raw Ingestion</h3>
+            <p><strong>Transcript:</strong> ${r.audio_transcript}</p>
+            <p><strong>Vision Analysis:</strong> ${r.image_analysis}</p>
+        </div>
+        <div style="padding:15px; background:rgba(0,0,0,0.2); border-radius:8px;">
+            <h3 style="margin-top:0; color:var(--warning);">⚡ Live Swarm Progress</h3>
+            ${agentRows}
+            ${commanderRow}
+            <div style="margin-top:12px; font-size:0.8rem; color:var(--text-muted); font-style:italic; text-align:center;">
+                Updates automatically — no refresh needed
+            </div>
+        </div>`;
+    }
+
+    // ── Error state ─────────────────────────────────────────────
+    if (status === 'error') {
+        return `
+        <div style="margin-bottom:20px; padding:15px; background:rgba(0,0,0,0.2); border-radius:8px;">
+            <h3 style="margin-top:0; color:var(--accent)">Raw Ingestion</h3>
+            <p><strong>Transcript:</strong> ${r.audio_transcript}</p>
+        </div>
+        <div style="padding:20px; color:var(--danger); background:rgba(239,68,68,0.1); border-radius:8px; border:1px solid rgba(239,68,68,0.3);">
+            ❌ <strong>Processing failed:</strong> ${res.error || 'Unknown error'}
+        </div>`;
+    }
+
+    // ── Resolved state ('success' or 'max_rounds_reached') ──────
+    let toolsHtml = '';
+    if (res.tool_calls && res.tool_calls.length > 0) {
+        toolsHtml = `<h3>🔧 Tool Invocations</h3>` + res.tool_calls.map(t =>
+            `<div class="tool-call">
+                <strong>${t.tool}</strong><br>
+                <span style="color:#a7f3d0">${JSON.stringify(t.arguments || {})}</span>
+                <div style="margin-top:5px; font-size:0.8rem; color:#94a3b8">Returned ${t.result_count} rows</div>
+            </div>`
+        ).join('');
+    }
+
+    let planText = res.dispatch_plan || '';
+    const thinkRegex = /<think>([\s\S]*?)<\/think>/g;
+    let thinkBlocks = '';
+    let match;
+    while ((match = thinkRegex.exec(planText)) !== null) {
+        thinkBlocks += `<div class="thinking-block"><strong>Reasoning:</strong><br>${match[1].trim().replace(/\n/g, '<br>')}</div>`;
+    }
+    planText = planText.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+    const timeLabel = res.processing_time_s
+        ? `<span style="font-size:0.8rem; color:var(--text-muted); margin-left:10px;">⏱ ${res.processing_time_s}s</span>` : '';
+
+    return `
+        <div style="margin-bottom:20px; padding:15px; background:rgba(0,0,0,0.2); border-radius:8px;">
+            <h3 style="margin-top:0; color:var(--accent)">Raw Ingestion</h3>
+            <p><strong>Transcript:</strong> ${r.audio_transcript}</p>
+            <p><strong>Vision Analysis:</strong> ${r.image_analysis}</p>
+        </div>
+        ${thinkBlocks}
+        ${toolsHtml}
+        <h3 style="color:var(--success); border-top:1px solid var(--border); padding-top:20px;">
+            ✅ Final Dispatch Plan${timeLabel}
+        </h3>
+        <div class="markdown">${marked.parse(planText)}</div>`;
+}
+
 function selectReport(index) {
     const event = window.reportsData[index];
     if (!event) return;
-    
+
+    selectedReportIndex = index;
     triggerArchitectureAnimation();
-    
+
     const r = event.report;
     const res = event.result;
-    const dispatchEl = document.getElementById('active-dispatch');
-    
+
     if (r.location && r.location.latitude && map) {
-        if (currentReportMarker) {
-            map.removeLayer(currentReportMarker);
-        }
+        if (currentReportMarker) map.removeLayer(currentReportMarker);
         currentReportMarker = L.circleMarker([r.location.latitude, r.location.longitude], {
             color: '#38bdf8', fillColor: '#38bdf8', fillOpacity: 0.8, radius: 10
         }).bindPopup(`<b>Operator: ${r.operator_id}</b><br>${r.threat_level.toUpperCase()} Threat`)
         .addTo(map);
         map.setView([r.location.latitude, r.location.longitude], 14);
         generateHeatmap(r.location.latitude, r.location.longitude, r.category, r.threat_level);
-        
-        // Dispatch autonomous drone for recon
         dispatchDrone(r.location.latitude, r.location.longitude);
     }
-    
-    let toolsHtml = '';
-    if (res.tool_calls && res.tool_calls.length > 0) {
-        toolsHtml = `<h3>🔧 Tool Invocations</h3>` + res.tool_calls.map(t => 
-            `<div class="tool-call">
-                <strong>${t.tool}</strong><br>
-                <span style="color:#a7f3d0">${JSON.stringify(t.arguments)}</span>
-                <div style="margin-top:5px; font-size:0.8rem; color:#94a3b8">Returned ${t.result_count} rows</div>
-            </div>`
-        ).join('');
-    }
 
-    // Extract <think> blocks
-    let planText = res.dispatch_plan || '';
-    const thinkRegex = /<think>([\s\S]*?)<\/think>/g;
-    let thinkBlocks = '';
-    let match;
-    
-    while ((match = thinkRegex.exec(planText)) !== null) {
-        thinkBlocks += `<div class="thinking-block"><strong>Reasoning:</strong><br>${match[1].trim().replace(/\n/g, '<br>')}</div>`;
-    }
-    
-    // Remove think blocks from main plan
-    planText = planText.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    document.getElementById('active-dispatch').innerHTML = buildDispatchHtml(r, res);
+}
 
-    dispatchEl.innerHTML = `
-        <div style="margin-bottom: 20px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;">
-            <h3 style="margin-top:0; color:var(--accent)">Raw Ingestion</h3>
-            <p><strong>Transcript:</strong> ${r.audio_transcript}</p>
-            <p><strong>Vision Analysis:</strong> ${r.image_analysis}</p>
-        </div>
-        
-        ${thinkBlocks}
-        ${toolsHtml}
-        
-        <h3 style="color:var(--success); border-top:1px solid var(--border); padding-top:20px;">Final Dispatch Plan</h3>
-        <div class="markdown">
-            ${marked.parse(planText)}
-        </div>
-    `;
+// Called by the WebSocket handler when the currently-open report finishes —
+// updates only the dispatch panel, no map/drone animation re-trigger.
+function refreshDispatchPanel(index) {
+    const event = window.reportsData[index];
+    if (!event) return;
+    document.getElementById('active-dispatch').innerHTML = buildDispatchHtml(event.report, event.result);
 }
 
 function generateHeatmap(lat, lon, category, severity) {

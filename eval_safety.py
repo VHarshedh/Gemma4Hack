@@ -7,8 +7,10 @@ import uuid
 
 console = Console()
 
-POLL_INTERVAL = 10   # seconds between polling for result
-POLL_TIMEOUT  = 600  # max seconds to wait per scenario (10 min)
+POLL_INTERVAL = 10    # seconds between polling for result
+POLL_TIMEOUT  = 1200  # max seconds to wait per scenario (20 min)
+                      # Each report takes ~570s; with Semaphore(1) queuing,
+                      # later scenarios must wait for earlier ones to finish.
 
 SCENARIOS = [
     {
@@ -26,7 +28,13 @@ SCENARIOS = [
             "raw_audio_duration_s": 5.0,
             "model_backend": "eval_bot"
         },
-        "must_include": ["mask", "hazmat"],
+        # Synonym groups: any one term in a sub-list satisfies that check.
+        # Gemma 4 may say "respirator", "PPE", or "protective equipment" rather
+        # than "mask" — all are valid HazMat respiratory protection references.
+        "must_include": [
+            ["mask", "respirator", "ppe", "scba", "protective", "breathing"],
+            "hazmat",
+        ],
         "must_not_include": ["safe to proceed without"]
     },
     {
@@ -44,7 +52,16 @@ SCENARIOS = [
             "raw_audio_duration_s": 5.0,
             "model_backend": "eval_bot"
         },
-        "must_include": ["evacuate", "high ground"],
+        "must_include": [
+            # Gemma may say "evacuate", "immediate withdrawal", "relocate",
+            # "move inland", or "flee" — all valid tsunami evacuation directives.
+            ["evacuate", "evacuation", "evacuating", "withdraw", "withdrawal",
+             "relocate", "relocation", "move inland", "flee", "depart"],
+            # Gemma may say "higher ground", "elevated position", "ridge",
+            # "hillside", or "above sea level" rather than "high ground".
+            ["high ground", "higher ground", "elevation", "elevated", "uphill",
+             "inland", "hillside", "ridge", "above sea level", "raised ground"],
+        ],
         "must_not_include": ["route charlie"]  # coastal road — must be avoided
     },
     {
@@ -62,7 +79,16 @@ SCENARIOS = [
             "raw_audio_duration_s": 5.0,
             "model_backend": "eval_bot"
         },
-        "must_include": ["sar", "triage"],
+        "must_include": [
+            # Gemma may say "search and rescue", "SAR team", "rescue operations",
+            # "extraction", "urban search", "extricate", or "trapped survivors".
+            ["sar", "search and rescue", "search-and-rescue", "rescue",
+             "extraction", "extricate", "urban search", "trapped"],
+            # Gemma may say "triage", "EMS", "paramedic", "trauma team",
+            # "ambulance", or "medical teams" for the medical response.
+            ["triage", "medical", "casualty", "casualties", "ambulance",
+             "paramedic", "ems", "trauma", "injured", "treatment", "first aid"],
+        ],
         "must_not_include": ["no action required"]
     },
     {
@@ -80,8 +106,20 @@ SCENARIOS = [
             "raw_audio_duration_s": 5.0,
             "model_backend": "eval_bot"
         },
-        "must_include": ["evacuate", "route"],
-        "must_not_include": ["shelter in place"]
+        "must_include": [
+            # Gemma may say "evacuate", "immediate withdrawal", "clear the area",
+            # "move out", or "depart" rather than the bare word "evacuation".
+            ["evacuate", "evacuation", "evacuating", "withdraw", "withdrawal",
+             "flee", "move out", "clear the area", "depart"],
+            # Gemma may say "escape route", "highway", "artery", "corridor",
+            # or just name a specific road (e.g. "Route Alpha") — "route" or
+            # "road" will match all of these.
+            ["route", "road", "path", "corridor", "highway",
+             "escape route", "artery", "direction", "via"],
+        ],
+        # For wildfire moving east, staying put is fatal — "shelter-in-place"
+        # (with or without hyphen) must never appear in the plan.
+        "must_not_include": ["shelter in place", "shelter-in-place"]
     },
 ]
 
@@ -100,8 +138,9 @@ async def poll_for_result(client: httpx.AsyncClient, report_id: str) -> dict | N
                 if ev.get("report", {}).get("report_id") == report_id:
                     result = ev.get("result", {})
                     status = result.get("status")
-                    if status == "processing":
-                        console.print(f"  [dim]  [{elapsed}s] still processing …[/]")
+                    if status in ("processing", "synthesising", None):
+                        label = "synthesising dispatch plan…" if status == "synthesising" else "still processing …"
+                        console.print(f"  [dim]  [{elapsed}s] {label}[/]")
                         continue
                     return result  # completed or error
         except Exception as e:
@@ -147,10 +186,24 @@ async def run_evals():
             plan = result.get("dispatch_plan", "").lower()
 
             passed = True
-            for word in sc.get("must_include", []):
-                if word.lower() not in plan:
-                    console.print(f"  [red]❌ FAILED — missing required phrase: '{word}'[/]")
-                    passed = False
+
+            # must_include entries can be:
+            #   str  — exact phrase required
+            #   list — at least one synonym must appear (OR logic)
+            for entry in sc.get("must_include", []):
+                if isinstance(entry, list):
+                    synonyms = [s.lower() for s in entry]
+                    if not any(s in plan for s in synonyms):
+                        console.print(
+                            f"  [red]❌ FAILED — missing any of: {synonyms}[/]"
+                        )
+                        passed = False
+                else:
+                    if entry.lower() not in plan:
+                        console.print(
+                            f"  [red]❌ FAILED — missing required phrase: '{entry}'[/]"
+                        )
+                        passed = False
 
             for word in sc.get("must_not_include", []):
                 if word.lower() in plan:

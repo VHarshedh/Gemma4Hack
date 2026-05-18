@@ -35,6 +35,12 @@ templates = Jinja2Templates(directory="templates")
 # In-memory store for active events (dashboard)
 EVENTS_STORE = []
 
+# Limit how many field reports run through the full LLM swarm at once.
+# Kept at 1 so only one report's swarm is active at a time — combined with
+# OllamaBackend.Semaphore(1) this ensures a single LLM call runs at a time,
+# preventing RAM overflow on CPU-only / low-memory machines.
+_PROCESSING_SEMAPHORE: asyncio.Semaphore | None = None
+
 def create_app(
     use_mock: bool = False,
     use_lite: bool = False,
@@ -99,6 +105,8 @@ def create_app(
     #    Skipped when using the mock LLM — no real sensor network is present.
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        global _PROCESSING_SEMAPHORE
+        _PROCESSING_SEMAPHORE = asyncio.Semaphore(1)
         task = None
         if not _engine_mock:
             task = asyncio.create_task(mqtt_listener(gis, manager))
@@ -187,17 +195,40 @@ def create_app(
         # field node gets an immediate 202 Accepted instead of waiting 90+ s.
         # The dashboard updates via WebSocket when the pipeline completes.
         async def _process_in_background():
-            try:
+            # Guard: lifespan may not have run (e.g. in TestClient without
+            # context manager), so create a one-off semaphore as fallback.
+            _sem = _PROCESSING_SEMAPHORE if _PROCESSING_SEMAPHORE is not None \
+                else asyncio.Semaphore(1)
+            async with _sem:
+                log.info("Swarm started for %s (slot acquired)", payload.report_id)
                 loop = asyncio.get_running_loop()
-                result = await loop.run_in_executor(
-                    None, partial(engine.process_report, report_dict)
-                )
-                event_record["result"] = result
-            except Exception as e:
-                log.error("Multi-agent processing failed for %s: %s", payload.report_id, e)
-                event_record["result"] = {"status": "error", "error": str(e)}
-            finally:
-                await manager.broadcast({"events": EVENTS_STORE})
+
+                def progress_cb(update: dict):
+                    """Called from the executor thread — must not await directly."""
+                    stage = update.get("stage")
+                    if stage == "specialist_done":
+                        agent_progress = event_record["result"].setdefault("agent_progress", {})
+                        agent_progress[update["agent"]] = {
+                            "tool_calls": update["tool_calls"],
+                            "processing_time_s": update["processing_time_s"],
+                        }
+                    elif stage == "commander_start":
+                        event_record["result"]["status"] = "synthesising"
+                    # Thread-safe: schedule the coroutine on the event loop
+                    asyncio.run_coroutine_threadsafe(
+                        manager.broadcast({"events": EVENTS_STORE}), loop
+                    )
+
+                try:
+                    result = await loop.run_in_executor(
+                        None, partial(engine.process_report, report_dict, progress_cb)
+                    )
+                    event_record["result"] = result
+                except Exception as e:
+                    log.error("Multi-agent processing failed for %s: %s", payload.report_id, e)
+                    event_record["result"] = {"status": "error", "error": str(e)}
+                finally:
+                    await manager.broadcast({"events": EVENTS_STORE})
 
         asyncio.create_task(_process_in_background())
 

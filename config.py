@@ -49,7 +49,7 @@ COMMAND_MODEL_PATH_LITE = Path(
 # ──────────────────────────────────────────────────────────────────────
 # Gemma 4 Sampling Parameters  (official recommended defaults)
 # ──────────────────────────────────────────────────────────────────────
-TEMPERATURE = 1.0
+TEMPERATURE = 0.4
 TOP_P = 0.95
 TOP_K = 64
 MAX_TOKENS = 2048          # Max generation length per request

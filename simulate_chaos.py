@@ -15,9 +15,9 @@ except ImportError:
     exit(1)
 
 
-REPORT_COUNT  = 30   # total reports to fire
-MONITOR_SECS  = 600  # how long to watch for completions (10 min)
-POLL_INTERVAL = 15   # check dashboard every N seconds
+REPORT_COUNT  = 30    # total reports to fire
+MONITOR_SECS  = 1800  # how long to watch for completions (30 min)
+POLL_INTERVAL = 180   # check dashboard every N seconds (3 min)
 
 # 30 distinct incidents — varied types, realistic transcripts, spread across
 # the Cascadia Bay operational area (approx Pacific Northwest coast)
@@ -199,38 +199,42 @@ async def monitor_completions(client, accepted: int, start: float):
     url = f"{COMMAND_NODE_URL}/api/v1/events"
     last_resolved = -1
 
-    while True:
-        elapsed = time.time() - start
-        if elapsed >= MONITOR_SECS:
-            break
-        try:
-            resp = await client.get(url, timeout=10.0)
-            events = resp.json().get("events", [])
-            resolved = sum(
-                1 for e in events
-                if isinstance(e.get("result"), dict)
-                and e["result"].get("status") not in ("processing", "error", None)
-            )
-            processing = sum(
-                1 for e in events
-                if isinstance(e.get("result"), dict)
-                and e["result"].get("status") == "processing"
-            )
-            errors = sum(
-                1 for e in events
-                if isinstance(e.get("result"), dict)
-                and e["result"].get("status") == "error"
-            )
-            if resolved != last_resolved:
-                print(f"  [{int(elapsed):>4}s]  ✅ resolved: {resolved}/{accepted}"
+    try:
+        while True:
+            elapsed = time.time() - start
+            if elapsed >= MONITOR_SECS:
+                break
+            try:
+                resp = await client.get(url, timeout=10.0)
+                events = resp.json().get("events", [])
+                resolved = sum(
+                    1 for e in events
+                    if isinstance(e.get("result"), dict)
+                    and e["result"].get("status") == "success"
+                )
+                processing = sum(
+                    1 for e in events
+                    if isinstance(e.get("result"), dict)
+                    and e["result"].get("status") in ("processing", "synthesising", None)
+                )
+                errors = sum(
+                    1 for e in events
+                    if isinstance(e.get("result"), dict)
+                    and e["result"].get("status") == "error"
+                )
+                # Always print so the terminal shows the script is alive
+                marker = "🆕" if resolved != last_resolved else "  "
+                print(f"  {marker}[{int(elapsed):>4}s]  ✅ resolved: {resolved}/{accepted}"
                       f"  |  ⏳ processing: {processing}"
                       f"  |  ❌ errors: {errors}")
                 last_resolved = resolved
                 if resolved + errors >= accepted:
                     break
-        except Exception as e:
-            print(f"  [{int(elapsed):>4}s]  poll error: {e}")
-        await asyncio.sleep(POLL_INTERVAL)
+            except Exception as e:
+                print(f"  [{int(elapsed):>4}s]  poll error: {e}")
+            await asyncio.sleep(POLL_INTERVAL)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        print("\n⚠️  Interrupted — printing partial summary ...")
 
     elapsed = time.time() - start
     # Final summary
@@ -240,7 +244,7 @@ async def monitor_completions(client, accepted: int, start: float):
         resolved = sum(
             1 for e in events
             if isinstance(e.get("result"), dict)
-            and e["result"].get("status") not in ("processing", "error", None)
+            and e["result"].get("status") == "success"
         )
         errors = sum(
             1 for e in events
@@ -262,7 +266,7 @@ async def monitor_completions(client, accepted: int, start: float):
 async def main():
     print("🚀 AEGIS DISASTER TRAFFIC SIMULATOR 🚀")
     print(f"Firing {len(INCIDENTS)} distinct incidents at {COMMAND_NODE_URL} ...")
-    print(f"Monitoring completions for {MONITOR_SECS}s. Watch the dashboard!\n")
+    print(f"Monitoring completions for {MONITOR_SECS}s ({MONITOR_SECS//60} min). Watch the dashboard!\n")
     for i, inc in enumerate(INCIDENTS, 1):
         print(f"  #{i:02d}  [{inc['threat_level'].upper():<8}]  {inc['category']}")
     print()
@@ -290,4 +294,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
